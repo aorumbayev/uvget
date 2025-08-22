@@ -1,0 +1,139 @@
+name: Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test Scripts
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            script: install.sh
+            shell: bash
+          - os: macos-latest  
+            script: install.sh
+            shell: bash
+          - os: windows-latest
+            script: install.ps1
+            shell: pwsh
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Lint script
+      run: |
+        if [[ "${{ matrix.script }}" == *.sh ]]; then
+          # Install shellcheck if not available
+          if ! command -v shellcheck &> /dev/null; then
+            if [[ "$RUNNER_OS" == "macOS" ]]; then
+              brew install shellcheck
+            elif [[ "$RUNNER_OS" == "Linux" ]]; then
+              sudo apt-get update && sudo apt-get install -y shellcheck
+            fi
+          fi
+          shellcheck ${{ matrix.script }}
+        else
+          pwsh -c "Invoke-ScriptAnalyzer -Path ${{ matrix.script }} -Severity Warning"
+        fi
+      shell: bash
+    
+    - name: Test help (Unix)
+      if: matrix.shell == 'bash'
+      run: ./${{ matrix.script }} --help
+      shell: bash
+    
+    - name: Test help (Windows)
+      if: matrix.shell == 'pwsh' 
+      run: .\${{ matrix.script }} -Help
+      shell: pwsh
+    
+    - name: Test dry run (Unix)
+      if: matrix.shell == 'bash'
+      run: ./${{ matrix.script }} --dry-run httpie
+      shell: bash
+    
+    - name: Test dry run (Windows)
+      if: matrix.shell == 'pwsh'
+      run: .\${{ matrix.script }} -DryRun httpie
+      shell: pwsh
+    
+    - name: Test with Python flag (Unix)
+      if: matrix.shell == 'bash'
+      run: ./${{ matrix.script }} --dry-run --with-python black
+      shell: bash
+    
+    - name: Test with Python flag (Windows)
+      if: matrix.shell == 'pwsh'
+      run: .\${{ matrix.script }} -DryRun -WithPython black
+      shell: pwsh
+    
+    - name: Test invalid input (Unix)
+      if: matrix.shell == 'bash'
+      run: |
+        set +e
+        ./${{ matrix.script }} --dry-run "invalid@package"
+        code=$?
+        if [ $code -eq 0 ]; then
+          echo "ERROR: Script should reject invalid package names"
+          exit 1
+        fi
+        echo "PASS: Invalid input correctly rejected"
+      shell: bash
+    
+    - name: Test invalid input (Windows)
+      if: matrix.shell == 'pwsh'
+      run: |
+        $ErrorActionPreference = "Continue"
+        .\${{ matrix.script }} -DryRun "invalid@package" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "ERROR: Script should reject invalid package names"
+          exit 1
+        } else {
+          Write-Host "PASS: Invalid input correctly rejected"
+          exit 0
+        }
+      shell: pwsh
+
+  integration:
+    name: Integration Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Clean environment (Unix)
+      if: matrix.os != 'windows-latest'
+      run: rm -rf ~/.cargo/bin/uv ~/.local/bin/uv ~/.cache/uv || true
+      shell: bash
+    
+    - name: Clean environment (Windows)  
+      if: matrix.os == 'windows-latest'
+      run: |
+        Remove-Item -Path "$env:USERPROFILE\.cargo\bin\uv.exe" -ErrorAction SilentlyContinue
+        Remove-Item -Path "$env:APPDATA\uv" -Recurse -ErrorAction SilentlyContinue
+      shell: pwsh
+    
+    - name: Test real installation (Unix)
+      if: matrix.os != 'windows-latest' 
+      run: |
+        ./install.sh httpie
+        ~/.local/bin/httpie --version || httpie --version
+      shell: bash
+    
+    - name: Test real installation (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        .\install.ps1 httpie
+        & "$env:USERPROFILE\.local\bin\httpie.exe" --version
+      shell: pwsh
